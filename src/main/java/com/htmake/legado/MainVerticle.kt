@@ -111,9 +111,17 @@ class MainVerticle : CoroutineVerticle() {
 
         router.get("/health").handler { it.success("ok!") }
 
-        // web界面
-        router.route("/*")
+        // 书源调试界面 (原有)
+        router.route("/debug/*")
                 .handler(StaticHandler.create("bookSourceDebug").setDefaultContentEncoding("UTF-8"))
+
+        // 前端 Web 界面
+        val webPath = System.getProperty("WEB_PATH") ?: "web"
+        router.route("/*")
+                .handler(StaticHandler.create(webPath)
+                    .setDefaultContentEncoding("UTF-8")
+                    .setCachingEnabled(false)
+                    .setIndexPage("index.html"))
 
         router.route("/getBookSources").coroutineHandler { getBookSources(it) }
         router.route("/saveBookSources").coroutineHandler { saveBookSources(it) }
