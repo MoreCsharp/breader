@@ -121,6 +121,13 @@ class MainVerticle : CoroutineVerticle() {
         router.route("/deleteBookSources").coroutineHandler { deleteBookSources(it) }
         router.route("/bookSourceDebugSSE").coroutineHandlerWithoutRes { bookSourceDebugSSE(it) }
 
+        // 阅读相关 API
+        router.route("/searchBook").coroutineHandler { searchBook(it) }
+        router.route("/getBookInfo").coroutineHandler { getBookInfo(it) }
+        router.route("/getChapterList").coroutineHandler { getChapterList(it) }
+        router.route("/getBookContent").coroutineHandler { getBookContent(it) }
+        router.route("/exploreBook").coroutineHandler { exploreBook(it) }
+
         var port = 9080
         try {
             var serverPort = System.getProperty("SERVER_PORT")
@@ -532,5 +539,253 @@ class MainVerticle : CoroutineVerticle() {
 
         response.write("event: end\n")
         response.end("data: " + jsonEncode(mapOf("end" to true), false) + "\n\n")
+    }
+
+    /**
+     * 搜索书籍
+     * @param bookSourceUrl 书源URL
+     * @param keyword 搜索关键词
+     * @param page 页码(可选，默认1)
+     */
+    suspend fun searchBook(context: RoutingContext): ReturnData {
+        val returnData = ReturnData()
+        var bookSourceUrl: String
+        var keyword: String
+        var page: Int
+
+        if (context.request().method() == HttpMethod.POST) {
+            val body = context.bodyAsJson
+            bookSourceUrl = body.getString("bookSourceUrl") ?: ""
+            keyword = body.getString("keyword") ?: ""
+            page = body.getInteger("page", 1)
+        } else {
+            bookSourceUrl = context.queryParam("bookSourceUrl").firstOrNull() ?: ""
+            keyword = context.queryParam("keyword").firstOrNull() ?: ""
+            page = context.queryParam("page").firstOrNull()?.toIntOrNull() ?: 1
+        }
+
+        if (bookSourceUrl.isEmpty()) {
+            return returnData.setErrorMsg("书源URL不能为空")
+        }
+        if (keyword.isEmpty()) {
+            return returnData.setErrorMsg("搜索关键词不能为空")
+        }
+
+        val userNameSpace = getUserNameSpace(context)
+        val bookSourceString = getBookSourceBySourceURL(bookSourceUrl, userNameSpace).first
+        if (bookSourceString.isNullOrEmpty()) {
+            return returnData.setErrorMsg("未找到对应书源")
+        }
+
+        try {
+            val webBook = WebBook(bookSourceString, debugLog = false, userNameSpace = userNameSpace)
+            val bookList = webBook.searchBook(keyword, page)
+            return returnData.setData(bookList)
+        } catch (e: Exception) {
+            logger.error("searchBook error: {}", e.message)
+            return returnData.setErrorMsg("搜索失败: ${e.message}")
+        }
+    }
+
+    /**
+     * 获取书籍详情
+     * @param bookSourceUrl 书源URL
+     * @param bookUrl 书籍URL
+     */
+    suspend fun getBookInfo(context: RoutingContext): ReturnData {
+        val returnData = ReturnData()
+        var bookSourceUrl: String
+        var bookUrl: String
+
+        if (context.request().method() == HttpMethod.POST) {
+            val body = context.bodyAsJson
+            bookSourceUrl = body.getString("bookSourceUrl") ?: ""
+            bookUrl = body.getString("bookUrl") ?: ""
+        } else {
+            bookSourceUrl = context.queryParam("bookSourceUrl").firstOrNull() ?: ""
+            bookUrl = context.queryParam("bookUrl").firstOrNull() ?: ""
+        }
+
+        if (bookSourceUrl.isEmpty()) {
+            return returnData.setErrorMsg("书源URL不能为空")
+        }
+        if (bookUrl.isEmpty()) {
+            return returnData.setErrorMsg("书籍URL不能为空")
+        }
+
+        val userNameSpace = getUserNameSpace(context)
+        val bookSourceString = getBookSourceBySourceURL(bookSourceUrl, userNameSpace).first
+        if (bookSourceString.isNullOrEmpty()) {
+            return returnData.setErrorMsg("未找到对应书源")
+        }
+
+        try {
+            val webBook = WebBook(bookSourceString, debugLog = false, userNameSpace = userNameSpace)
+            val book = webBook.getBookInfo(bookUrl)
+            return returnData.setData(book)
+        } catch (e: Exception) {
+            logger.error("getBookInfo error: {}", e.message)
+            return returnData.setErrorMsg("获取书籍详情失败: ${e.message}")
+        }
+    }
+
+    /**
+     * 获取章节目录
+     * @param bookSourceUrl 书源URL
+     * @param bookUrl 书籍URL
+     * @param tocUrl 目录URL(可选)
+     */
+    suspend fun getChapterList(context: RoutingContext): ReturnData {
+        val returnData = ReturnData()
+        var bookSourceUrl: String
+        var bookUrl: String
+        var tocUrl: String
+
+        if (context.request().method() == HttpMethod.POST) {
+            val body = context.bodyAsJson
+            bookSourceUrl = body.getString("bookSourceUrl") ?: ""
+            bookUrl = body.getString("bookUrl") ?: ""
+            tocUrl = body.getString("tocUrl") ?: ""
+        } else {
+            bookSourceUrl = context.queryParam("bookSourceUrl").firstOrNull() ?: ""
+            bookUrl = context.queryParam("bookUrl").firstOrNull() ?: ""
+            tocUrl = context.queryParam("tocUrl").firstOrNull() ?: ""
+        }
+
+        if (bookSourceUrl.isEmpty()) {
+            return returnData.setErrorMsg("书源URL不能为空")
+        }
+        if (bookUrl.isEmpty()) {
+            return returnData.setErrorMsg("书籍URL不能为空")
+        }
+
+        val userNameSpace = getUserNameSpace(context)
+        val bookSourceString = getBookSourceBySourceURL(bookSourceUrl, userNameSpace).first
+        if (bookSourceString.isNullOrEmpty()) {
+            return returnData.setErrorMsg("未找到对应书源")
+        }
+
+        try {
+            val webBook = WebBook(bookSourceString, debugLog = false, userNameSpace = userNameSpace)
+            val book = webBook.getBookInfo(bookUrl)
+            if (tocUrl.isNotEmpty()) {
+                book.tocUrl = tocUrl
+            }
+            val chapterList = webBook.getChapterList(book)
+            return returnData.setData(chapterList)
+        } catch (e: Exception) {
+            logger.error("getChapterList error: {}", e.message)
+            return returnData.setErrorMsg("获取章节目录失败: ${e.message}")
+        }
+    }
+
+    /**
+     * 获取章节内容
+     * @param bookSourceUrl 书源URL
+     * @param bookUrl 书籍URL
+     * @param chapterUrl 章节URL
+     * @param chapterIndex 章节索引
+     * @param chapterTitle 章节标题
+     */
+    suspend fun getBookContent(context: RoutingContext): ReturnData {
+        val returnData = ReturnData()
+        var bookSourceUrl: String
+        var bookUrl: String
+        var chapterUrl: String
+        var chapterIndex: Int
+        var chapterTitle: String
+
+        if (context.request().method() == HttpMethod.POST) {
+            val body = context.bodyAsJson
+            bookSourceUrl = body.getString("bookSourceUrl") ?: ""
+            bookUrl = body.getString("bookUrl") ?: ""
+            chapterUrl = body.getString("chapterUrl") ?: ""
+            chapterIndex = body.getInteger("chapterIndex", 0)
+            chapterTitle = body.getString("chapterTitle") ?: ""
+        } else {
+            bookSourceUrl = context.queryParam("bookSourceUrl").firstOrNull() ?: ""
+            bookUrl = context.queryParam("bookUrl").firstOrNull() ?: ""
+            chapterUrl = context.queryParam("chapterUrl").firstOrNull() ?: ""
+            chapterIndex = context.queryParam("chapterIndex").firstOrNull()?.toIntOrNull() ?: 0
+            chapterTitle = context.queryParam("chapterTitle").firstOrNull() ?: ""
+        }
+
+        if (bookSourceUrl.isEmpty()) {
+            return returnData.setErrorMsg("书源URL不能为空")
+        }
+        if (chapterUrl.isEmpty()) {
+            return returnData.setErrorMsg("章节URL不能为空")
+        }
+
+        val userNameSpace = getUserNameSpace(context)
+        val bookSourceString = getBookSourceBySourceURL(bookSourceUrl, userNameSpace).first
+        if (bookSourceString.isNullOrEmpty()) {
+            return returnData.setErrorMsg("未找到对应书源")
+        }
+
+        try {
+            val webBook = WebBook(bookSourceString, debugLog = false, userNameSpace = userNameSpace)
+            val book = io.legado.app.data.entities.Book()
+            book.bookUrl = bookUrl
+            book.origin = bookSourceUrl
+
+            val chapter = io.legado.app.data.entities.BookChapter()
+            chapter.url = chapterUrl
+            chapter.bookUrl = bookUrl
+            chapter.index = chapterIndex
+            chapter.title = chapterTitle
+
+            val content = webBook.getBookContent(book, chapter)
+            return returnData.setData(mapOf("content" to content))
+        } catch (e: Exception) {
+            logger.error("getBookContent error: {}", e.message)
+            return returnData.setErrorMsg("获取章节内容失败: ${e.message}")
+        }
+    }
+
+    /**
+     * 发现书籍
+     * @param bookSourceUrl 书源URL
+     * @param url 发现URL
+     * @param page 页码(可选，默认1)
+     */
+    suspend fun exploreBook(context: RoutingContext): ReturnData {
+        val returnData = ReturnData()
+        var bookSourceUrl: String
+        var url: String
+        var page: Int
+
+        if (context.request().method() == HttpMethod.POST) {
+            val body = context.bodyAsJson
+            bookSourceUrl = body.getString("bookSourceUrl") ?: ""
+            url = body.getString("url") ?: ""
+            page = body.getInteger("page", 1)
+        } else {
+            bookSourceUrl = context.queryParam("bookSourceUrl").firstOrNull() ?: ""
+            url = context.queryParam("url").firstOrNull() ?: ""
+            page = context.queryParam("page").firstOrNull()?.toIntOrNull() ?: 1
+        }
+
+        if (bookSourceUrl.isEmpty()) {
+            return returnData.setErrorMsg("书源URL不能为空")
+        }
+        if (url.isEmpty()) {
+            return returnData.setErrorMsg("发现URL不能为空")
+        }
+
+        val userNameSpace = getUserNameSpace(context)
+        val bookSourceString = getBookSourceBySourceURL(bookSourceUrl, userNameSpace).first
+        if (bookSourceString.isNullOrEmpty()) {
+            return returnData.setErrorMsg("未找到对应书源")
+        }
+
+        try {
+            val webBook = WebBook(bookSourceString, debugLog = false, userNameSpace = userNameSpace)
+            val bookList = webBook.exploreBook(url, page)
+            return returnData.setData(bookList)
+        } catch (e: Exception) {
+            logger.error("exploreBook error: {}", e.message)
+            return returnData.setErrorMsg("发现书籍失败: ${e.message}")
+        }
     }
 }
